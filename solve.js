@@ -306,25 +306,37 @@ function isContinued(line) {
 
 /** The first index from `from` where `s` holds `what` outside a backslash escape, or -1. */
 function findUnescaped(s, what, from) {
-  for (let j = from; j <= s.length - what.length; j++) {
-    if (s.charCodeAt(j) === 92 && j + 1 < s.length && s.charCodeAt(j + 1) < 128 && ESC_T[s.charCodeAt(j + 1)] === 1) { j++; continue; }
-    if (s.startsWith(what, j)) return j;
+  let p = s.indexOf(what, from);
+  while (p !== -1) {
+    // A hit is escaped iff an odd run of backslashes precedes it. (The run
+    // cannot start before `from`: the opener just before `from` is not a backslash.)
+    let b = 0;
+    while (p - 1 - b >= from && s.charCodeAt(p - 1 - b) === 92) b++;
+    if (b % 2 === 0) return p;
+    p = s.indexOf(what, p + 1);
   }
   return -1;
 }
 /** The first single * from `from` (one whose run is not **), outside an escape, or -1. */
 function findSingleStar(s, from) {
-  for (let j = from; j < s.length; j++) {
-    const code = s.charCodeAt(j);
-    if (code === 92 && j + 1 < s.length && s.charCodeAt(j + 1) < 128 && ESC_T[s.charCodeAt(j + 1)] === 1) { j++; continue; }
-    if (code !== 42) continue;
-    if (s.charCodeAt(j + 1) === 42) { j++; continue; }
-    return j;
+  let p = s.indexOf('*', from);
+  while (p !== -1) {
+    let b = 0;
+    while (p - 1 - b >= from && s.charCodeAt(p - 1 - b) === 92) b++;
+    if (b % 2 === 1) { p = s.indexOf('*', p + 1); continue; }
+    if (s.charCodeAt(p + 1) === 42) { p = s.indexOf('*', p + 2); continue; }
+    return p;
   }
   return -1;
 }
 
 const INLINE_SPECIAL = /[\\`*[]/;
+
+/** `t` rendered inline, without a call frame when it holds no markup. */
+function inlineInner(t, env, C) {
+  return INLINE_SPECIAL.test(t) ? inline(t, env, C) : escapeHtml(t);
+}
+const INLINE_NEXT = /[\\`*[]/g;
 
 /** `s` rendered inline; `env.link(target)` is a link's href. */
 function inline(s, env, C) {
@@ -334,6 +346,10 @@ function inline(s, env, C) {
   let plain = 0;
   const flush = (to) => { if (to > plain) out.push(escapeHtml(s.slice(plain, to))); };
   while (i < s.length) {
+    INLINE_NEXT.lastIndex = i;
+    const m = INLINE_NEXT.exec(s);
+    if (m === null) break;
+    i = m.index;
     const code = s.charCodeAt(i);
     if (code === 92 && i + 1 < s.length && s.charCodeAt(i + 1) < 128 && ESC_T[s.charCodeAt(i + 1)] === 1) {
       flush(i);
@@ -358,7 +374,7 @@ function inline(s, env, C) {
         const j = findUnescaped(s, '**', i + 2);
         if (j > i + 2) {
           flush(i);
-          out.push('<strong>', inline(s.slice(i + 2, j), env, C), '</strong>');
+          out.push('<strong>', inlineInner(s.slice(i + 2, j), env, C), '</strong>');
           i = j + 2;
           plain = i;
         } else i += 2;
@@ -367,7 +383,7 @@ function inline(s, env, C) {
       const j = findSingleStar(s, i + 1);
       if (j > i + 1) {
         flush(i);
-        out.push('<em>', inline(s.slice(i + 1, j), env, C), '</em>');
+        out.push('<em>', inlineInner(s.slice(i + 1, j), env, C), '</em>');
         i = j + 1;
         plain = i;
       } else i++;
@@ -379,7 +395,7 @@ function inline(s, env, C) {
       const target = m === -1 ? '' : s.slice(k + 2, m);
       if (target !== '' && !WS_RE.test(target)) {
         flush(i);
-        out.push('<a href="', escapeHtml(env.link(target)), '">', inline(s.slice(i + 1, k), env, C), '</a>');
+        out.push('<a href="', escapeHtml(env.link(target)), '">', inlineInner(s.slice(i + 1, k), env, C), '</a>');
         i = m + 1;
         plain = i;
       } else i++;
